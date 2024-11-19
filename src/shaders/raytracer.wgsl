@@ -253,37 +253,37 @@ fn metal(normal : vec3f, direction: vec3f, fuzz: f32, random_sphere: vec3f) -> m
 {
   var reflected = direction - 2.0 * dot(direction, normal) * normal;
   var scatter_direction = reflected + fuzz * random_sphere;
-  return material_behaviour(true, scatter_direction);
+  return material_behaviour(true, normalize(scatter_direction));
 }
 
 fn dielectric(normal : vec3f, r_direction: vec3f, refraction_index: f32, frontface: bool, random_sphere: vec3f, fuzz: f32, rng_state: ptr<function, u32>) -> material_behaviour
 {  
   var refraction_ratio = select(1.0 / refraction_index, refraction_index, frontface); // Ratio of indices of refraction
-    var cos_theta = min(dot(-r_direction, normal), 1.0); // Angle of incidence
-    var sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+  var cos_theta = min(dot(-r_direction, normal), 1.0); // Angle of incidence
+  var sin_theta = sqrt(1.0 - cos_theta * cos_theta);
 
-    // Check for total internal reflection
-    if (refraction_ratio * sin_theta > 1.0) {
-        // Reflect instead of refracting
-        var reflected = r_direction - 2.0 * dot(r_direction, normal) * normal;
-        return material_behaviour(true, normalize(reflected));
-    }
+  // Check for total internal reflection
+  if (refraction_ratio * sin_theta > 1.0) {
+      // Reflect instead of refracting
+      var reflected = r_direction - 2.0 * dot(r_direction, normal) * normal;
+      return material_behaviour(true, normalize(reflected));
+  }
 
-    // Calculate Fresnel reflectance (Schlick's approximation)
-    var r0 = pow((1.0 - refraction_ratio) / (1.0 + refraction_ratio), 2.0);
-    var reflectance = r0 + (1.0 - r0) * pow(1.0 - cos_theta, 5.0);
+  // Calculate Fresnel reflectance (Schlick's approximation)
+  var r0 = pow((1.0 - refraction_ratio) / (1.0 + refraction_ratio), 2.0);
+  var reflectance = r0 + (1.0 - r0) * pow(1.0 - cos_theta, 5.0);
 
-    // Randomly reflect or refract based on reflectance
-    if (rng_next_float(rng_state) < reflectance) {
-        var reflected = r_direction - 2.0 * dot(r_direction, normal) * normal;
-        return material_behaviour(true, normalize(reflected));
-    } else {
-        // Refract the ray
-        var refracted_perpendicular = refraction_ratio * (r_direction + cos_theta * normal);
-        var refracted_parallel = -sqrt(abs(1.0 - dot(refracted_perpendicular, refracted_perpendicular))) * normal;
-        var refracted = refracted_perpendicular + refracted_parallel;
-        return material_behaviour(true, normalize(refracted));
-    }
+  // Randomly reflect or refract based on reflectance
+  if (rng_next_float(rng_state) < reflectance) {
+      var reflected = r_direction - 2.0 * dot(r_direction, normal) * normal;
+      return material_behaviour(true, normalize(reflected));
+  } else {
+      // Refract the ray
+      var refracted_perpendicular = refraction_ratio * (r_direction + cos_theta * normal);
+      var refracted_parallel = -sqrt(abs(1.0 - dot(refracted_perpendicular, refracted_perpendicular))) * normal;
+      var refracted = refracted_perpendicular + refracted_parallel;
+      return material_behaviour(true, refracted);
+  }
 }
 
 fn emmisive(color: vec3f, light: f32) -> material_behaviour
@@ -309,11 +309,11 @@ fn trace(r: ray, rng_state: ptr<function, u32>) -> vec3f
         var material = hit.object_material;
         var random_sphere = rng_next_vec3_in_unit_sphere(rng_state);
 
-        if (material.w == 0.0) { // Lambertian
+        if (material.x == 0.0) { // Lambertian
           behaviour = lambertian(hit.normal, material.x, random_sphere, rng_state);
-        } else if (material.w == 1.0) { // Metal
+        } else if (material.x > 0.0) { // Metal
           behaviour = metal(hit.normal, r_.direction, material.y, random_sphere);
-        } else if (material.w == 2.0) { // Dielectric
+        } else if (material.x < 0.0) { // Dielectric
           behaviour = dielectric(hit.normal, r_.direction, material.z, hit.frontface, random_sphere, material.y, rng_state);
         } else if (material.w == 3.0) { // Emissive
           behaviour = emmisive(hit.object_color.xyz, material.x);
@@ -324,7 +324,7 @@ fn trace(r: ray, rng_state: ptr<function, u32>) -> vec3f
             color *= hit.object_color.xyz;
             r_ = ray(offset_p, behaviour.direction);
         } else {
-            light += color * hit.object_color.xyz * material.x;
+            light += color * hit.object_color.xyz * behaviour.direction;
             break;
         }
     } else {
