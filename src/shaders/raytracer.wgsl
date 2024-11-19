@@ -162,22 +162,128 @@ fn check_ray_collision(r: ray, max: f32) -> hit_record
   var record = hit_record(RAY_TMAX, vec3f(0.0), vec3f(0.0), vec4f(0.0), vec4f(0.0), false, false);
   var closest = record;
 
+  for (var i = 0; i < spheresCount; i = i + 1) {
+    var sphere = spheresb[i];
+    hit_sphere(sphere.transform.xyz, sphere.transform.w, r, &record, max);
+    
+    if (record.hit_anything && record.t < closest.t) {
+        closest = record;
+        closest.object_color = sphere.color;
+        closest.object_material = sphere.material;
+    }
+  }
+
+  // Check for sphere collisions
+    for (var i = 0; i < spheresCount; i = i + 1) {
+        var sphere = spheresb[i];
+        var temp_record = hit_record(RAY_TMAX, vec3f(0.0), vec3f(0.0), vec4f(0.0), vec4f(0.0), false, false);
+        hit_sphere(sphere.transform.xyz, sphere.transform.w, r, &temp_record, max);
+        
+        if (temp_record.hit_anything && temp_record.t < closest.t) {
+            closest = temp_record;
+            closest.object_color = sphere.color;
+            closest.object_material = sphere.material;
+        }
+    }
+
+    // Check for quad collisions
+    for (var i = 0; i < quadsCount; i = i + 1) {
+        var quad = quadsb[i];
+        var temp_record = hit_record(RAY_TMAX, vec3f(0.0), vec3f(0.0), quad.color, quad.material, false, true);
+        hit_quad(r, quad.Q, quad.u, quad.v, &temp_record, max);
+        
+        if (temp_record.hit_anything && temp_record.t < closest.t) {
+            closest = temp_record;
+            closest.object_color = quad.color;
+            closest.object_material = quad.material;
+        }
+    }
+
+    // Check for box collisions
+    for (var i = 0; i < boxesCount; i = i + 1) {
+        var box = boxesb[i];
+        var temp_record = hit_record(RAY_TMAX, vec3f(0.0), vec3f(0.0), box.color, box.material, false, true);
+        hit_box(r, box.center.xyz, box.radius.xyz, &temp_record, max);
+        
+        if (temp_record.hit_anything && temp_record.t < closest.t) {
+            closest = temp_record;
+            closest.object_color = box.color;
+            closest.object_material = box.material;
+        }
+    }
+
+    // Check for triangle collisions
+    for (var i = 0; i < trianglesCount; i = i + 1) {
+        var triangle = trianglesb[i];
+        var temp_record = hit_record(RAY_TMAX, vec3f(0.0), vec3f(0.0), vec4f(1.0), vec4f(1.0), false, true);
+        hit_triangle(r, triangle.v0.xyz, triangle.v1.xyz, triangle.v2.xyz, &temp_record, max);
+        
+        if (temp_record.hit_anything && temp_record.t < closest.t) {
+            closest = temp_record;
+            closest.object_color = vec4f(1.0); // Supondo uma cor padrão para triângulos
+            closest.object_material = vec4f(1.0); // Supondo um material padrão
+        }
+    }
+
+  // Check for mesh collisions
+  // for (var i = 0; i < meshCount; i = i + 1) {
+  //     var mesh = meshb[i];
+  //     var hit = hit_mesh(r, mesh, RAY_TMIN, closest.t);
+  //     if (hit.hit_anything && hit.t < closest.t) {
+  //         closest = hit;
+  //     }
+  // }
+
   return closest;
+
 }
 
 fn lambertian(normal : vec3f, absorption: f32, random_sphere: vec3f, rng_state: ptr<function, u32>) -> material_behaviour
 {
-  return material_behaviour(true, vec3f(0.0));
+  var prob = rng_next_float(rng_state);
+  if (prob < absorption) {
+      return material_behaviour(false, vec3f(0.0));
+  } else {
+      var scatter_direction = normal + random_sphere;
+      return material_behaviour(true, scatter_direction);
+  }
 }
 
 fn metal(normal : vec3f, direction: vec3f, fuzz: f32, random_sphere: vec3f) -> material_behaviour
 {
-  return material_behaviour(false, vec3f(0.0));
+  var reflected = direction - 2.0 * dot(direction, normal) * normal;
+  var scatter_direction = reflected + fuzz * random_sphere;
+  return material_behaviour(true, scatter_direction);
 }
 
 fn dielectric(normal : vec3f, r_direction: vec3f, refraction_index: f32, frontface: bool, random_sphere: vec3f, fuzz: f32, rng_state: ptr<function, u32>) -> material_behaviour
 {  
-  return material_behaviour(false, vec3f(0.0));
+  var refraction_ratio = select(1.0 / refraction_index, refraction_index, frontface); // Ratio of indices of refraction
+    var cos_theta = min(dot(-r_direction, normal), 1.0); // Angle of incidence
+    var sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+
+    // Check for total internal reflection
+    if (refraction_ratio * sin_theta > 1.0) {
+        // Reflect instead of refracting
+        var reflected = r_direction - 2.0 * dot(r_direction, normal) * normal;
+        return material_behaviour(true, normalize(reflected));
+    }
+
+    // Calculate Fresnel reflectance (Schlick's approximation)
+    var r0 = pow((1.0 - refraction_ratio) / (1.0 + refraction_ratio), 2.0);
+    var reflectance = r0 + (1.0 - r0) * pow(1.0 - cos_theta, 5.0);
+
+    // Randomly reflect or refract based on reflectance
+    if (rng_next_float(rng_state) < reflectance) {
+        var reflected = r_direction - 2.0 * dot(r_direction, normal) * normal;
+        return material_behaviour(true, normalize(reflected));
+    } else {
+        // Refract the ray
+        var refracted_perpendicular = refraction_ratio * (r_direction + cos_theta * normal);
+        var refracted_parallel = -sqrt(abs(1.0 - dot(refracted_perpendicular, refracted_perpendicular))) * normal;
+        var refracted = refracted_perpendicular + refracted_parallel;
+        return material_behaviour(true, normalize(refracted));
+    }
 }
 
 fn emmisive(color: vec3f, light: f32) -> material_behaviour
@@ -198,7 +304,33 @@ fn trace(r: ray, rng_state: ptr<function, u32>) -> vec3f
 
   for (var j = 0; j < maxbounces; j = j + 1)
   {
+    var hit = check_ray_collision(r_, RAY_TMAX);
+    if (hit.hit_anything) {
+        var material = hit.object_material;
+        var random_sphere = rng_next_vec3_in_unit_sphere(rng_state);
 
+        if (material.w == 0.0) { // Lambertian
+          behaviour = lambertian(hit.normal, material.x, random_sphere, rng_state);
+        } else if (material.w == 1.0) { // Metal
+          behaviour = metal(hit.normal, r_.direction, material.y, random_sphere);
+        } else if (material.w == 2.0) { // Dielectric
+          behaviour = dielectric(hit.normal, r_.direction, material.z, hit.frontface, random_sphere, material.y, rng_state);
+        } else if (material.w == 3.0) { // Emissive
+          behaviour = emmisive(hit.object_color.xyz, material.x);
+        }
+
+        if (behaviour.scatter) {
+            var offset_p = (hit.p + RAY_TMIN) * hit.normal;
+            color *= hit.object_color.xyz;
+            r_ = ray(offset_p, behaviour.direction);
+        } else {
+            light += color * hit.object_color.xyz * material.x;
+            break;
+        }
+    } else {
+      light += color * envoriment_color(r_.direction, backgroundcolor1, backgroundcolor2);
+      break;
+    }
   }
 
   return light;
@@ -233,11 +365,24 @@ fn render(@builtin(global_invocation_id) id : vec3u)
     // 3. Call trace function
     // 4. Average the color
 
-    var color_out = vec4(linear_to_gamma(color), 1.0);
+    color = vec3(0.0);
+
+    for (var i = 0; i < samples_per_pixel; i = i + 1) {
+        var r = get_ray(cam, uv, &rng_state);
+        color += trace(r, &rng_state);
+    }
+
+    color /= f32(samples_per_pixel);
+  
+    var color_out = vec4f(linear_to_gamma(color), 1.0);
+    
     var map_fb = mapfb(id.xy, rez);
     
     // 5. Accumulate the color
     var should_accumulate = uniforms[3];
+    if (should_accumulate > 0) {
+        color_out = vec4((color_out.xyz + fb[map_fb].xyz)/2.0, color_out.w);
+    }
 
     // Set the color to the framebuffer
     rtfb[map_fb] = color_out;
