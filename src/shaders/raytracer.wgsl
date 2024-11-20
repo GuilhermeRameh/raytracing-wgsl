@@ -288,7 +288,7 @@ fn dielectric(normal : vec3f, r_direction: vec3f, refraction_index: f32, frontfa
 
 fn emmisive(color: vec3f, light: f32) -> material_behaviour
 {
-  return material_behaviour(false, vec3f(0.0));
+  return material_behaviour(false, vec3f(light));
 }
 
 fn trace(r: ray, rng_state: ptr<function, u32>) -> vec3f
@@ -309,14 +309,27 @@ fn trace(r: ray, rng_state: ptr<function, u32>) -> vec3f
         var material = hit.object_material;
         var random_sphere = rng_next_vec3_in_unit_sphere(rng_state);
 
-        if (material.x == 0.0) { // Lambertian
-          behaviour = lambertian(hit.normal, material.x, random_sphere, rng_state);
-        } else if (material.x > 0.0) { // Metal
-          behaviour = metal(hit.normal, r_.direction, material.y, random_sphere);
-        } else if (material.x < 0.0) { // Dielectric
-          behaviour = dielectric(hit.normal, r_.direction, material.z, hit.frontface, random_sphere, material.y, rng_state);
-        } else if (material.w == 3.0) { // Emissive
-          behaviour = emmisive(hit.object_color.xyz, material.x);
+        var smoothness = material.y;
+        var absorption = material.x;
+        var specular = material.z;
+        var emission = material.w;
+
+        // Baseando-se nos valores de cada componente para determinar o tipo do material
+        if (absorption > 0.0 && smoothness == 0.0 && specular == 0.0 && emission == 0.0) {
+            // Lambertian: totalmente difuso
+            behaviour = lambertian(hit.normal, absorption, random_sphere, rng_state);
+        } else if (absorption < 0.0 && emission == 0.0) {
+            // Dielectric: transparente, com índice de refração baseado no valor absoluto de smoothness
+            behaviour = dielectric(hit.normal, r_.direction, absorption, hit.frontface, random_sphere, smoothness, rng_state);
+        } else if (smoothness >= 0.0 && smoothness <= 1.0 && specular > 0.0 && emission == 0.0) {
+            // Metal: reflexivo, com possíveis variações de "fuzziness"
+            behaviour = metal(hit.normal, r_.direction, smoothness, random_sphere);
+        } else if (emission > 0.0) {
+            // Emissive: material que emite luz
+            behaviour = emmisive(hit.object_color.xyz, emission);
+        } else {
+            // Caso não encaixe em nenhum dos tipos conhecidos, material padrão (debugging)
+            behaviour = lambertian(hit.normal, absorption, random_sphere, rng_state);
         }
 
         if (behaviour.scatter) {
@@ -328,8 +341,8 @@ fn trace(r: ray, rng_state: ptr<function, u32>) -> vec3f
             break;
         }
     } else {
-      light += color * envoriment_color(r_.direction, backgroundcolor1, backgroundcolor2);
-      break;
+        light += color * envoriment_color(r_.direction, backgroundcolor1, backgroundcolor2);
+        break;
     }
   }
 
